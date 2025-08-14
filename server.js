@@ -6,13 +6,13 @@ app.use(express.json());
 
 const {
   PORT = 8080,
-  API_KEY, // Your Render API key (single name)
+  API_KEY,
   WP_BASEURL,
   WP_USER,
   WP_APP_PASSWORD
 } = process.env;
 
-// WordPress Basic Auth
+// WordPress auth header
 const wpAuthHeader = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
 
 // Security middleware
@@ -29,102 +29,154 @@ app.get("/healthz", (req, res) => {
   res.json({ status: "ok" });
 });
 
-/* ---------------------------------------------------------
-   MCP Tool Manifest — lets MCP Clients know what we can do
---------------------------------------------------------- */
-app.get("/mcp/tools", (req, res) => {
-  res.json({
-    tools: [
-      {
-        name: "getPillarArticle",
-        description: "Fetches a specific post by ID from WordPress.",
-        parameters: { id: "number" }
-      },
-      {
-        name: "getAllPosts",
-        description: "Fetches all posts except the specified pillar article.",
-        parameters: { excludeId: "number" }
-      },
-      {
-        name: "updatePost",
-        description: "Updates an existing WordPress post with new content.",
-        parameters: { id: "number", content: "string" }
-      },
-      {
-        name: "getCategories",
-        description: "Fetch all WordPress categories.",
-        parameters: {}
-      },
-      {
-        name: "uploadMedia",
-        description: "Upload an image to WordPress from a public URL.",
-        parameters: { url: "string", filename: "string" }
-      }
-    ]
-  });
-});
-
-/* ---------------------------------------------------------
-   MCP Tool Execution Endpoint
---------------------------------------------------------- */
-app.post("/mcp/call", async (req, res) => {
-  const { tool, args } = req.body;
-
+/**
+ * ------------------------------
+ * MCP ROUTE
+ * ------------------------------
+ */
+app.post("/mcp", async (req, res) => {
   try {
-    switch (tool) {
-      case "getPillarArticle": {
-        const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts/${args.id}`, {
-          headers: { Authorization: wpAuthHeader }
-        });
-        return res.json(await r.json());
-      }
-      case "getAllPosts": {
-        const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts?exclude=${args.excludeId}&per_page=100`, {
-          headers: { Authorization: wpAuthHeader }
-        });
-        return res.json(await r.json());
-      }
-      case "updatePost": {
-        const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts/${args.id}`, {
-          method: "PUT",
-          headers: {
-            Authorization: wpAuthHeader,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ content: args.content })
-        });
-        return res.json(await r.json());
-      }
-      case "getCategories": {
-        const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/categories`, {
-          headers: { Authorization: wpAuthHeader }
-        });
-        return res.json(await r.json());
-      }
-      case "uploadMedia": {
-        const fileResponse = await fetch(args.url);
-        const fileBuffer = await fileResponse.arrayBuffer();
+    const { action, params } = req.body;
 
-        const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/media`, {
-          method: "POST",
-          headers: {
-            Authorization: wpAuthHeader,
-            "Content-Disposition": `attachment; filename="${args.filename || "upload.jpg"}"`,
-            "Content-Type": "image/jpeg"
-          },
-          body: Buffer.from(fileBuffer)
-        });
-        return res.json(await r.json());
-      }
+    switch (action) {
+      case "getRecentPosts":
+        return getRecentPosts(req, res);
+      case "createPost":
+        return createPost(req, res, params);
+      case "updatePost":
+        return updatePost(req, res, params);
+      case "deletePost":
+        return deletePost(req, res, params);
+      case "getCategories":
+        return getCategories(req, res);
+      case "createCategory":
+        return createCategory(req, res, params);
+      case "uploadMedia":
+        return uploadMedia(req, res, params);
       default:
-        return res.status(400).json({ error: "Unknown tool" });
+        return res.status(400).json({ error: "Unknown action" });
     }
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
+/**
+ * ------------------------------
+ * WORDPRESS API FUNCTIONS
+ * ------------------------------
+ */
+const getRecentPosts = async (req, res) => {
+  try {
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts?per_page=10`, {
+      headers: { Authorization: wpAuthHeader }
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const createPost = async (req, res, body) => {
+  try {
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts`, {
+      method: "POST",
+      headers: {
+        Authorization: wpAuthHeader,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body || req.body)
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const updatePost = async (req, res, { id, ...body }) => {
+  try {
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts/${id}`, {
+      method: "PUT",
+      headers: {
+        Authorization: wpAuthHeader,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body || req.body)
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const deletePost = async (req, res, { id }) => {
+  try {
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/posts/${id}?force=true`, {
+      method: "DELETE",
+      headers: { Authorization: wpAuthHeader }
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const getCategories = async (req, res) => {
+  try {
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/categories`, {
+      headers: { Authorization: wpAuthHeader }
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const createCategory = async (req, res, body) => {
+  try {
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/categories`, {
+      method: "POST",
+      headers: {
+        Authorization: wpAuthHeader,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body || req.body)
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const uploadMedia = async (req, res, { url: fileUrl, filename }) => {
+  try {
+    filename = filename || "upload.jpg";
+    const fileResponse = await fetch(fileUrl);
+    const fileBuffer = await fileResponse.arrayBuffer();
+
+    const r = await fetch(`${WP_BASEURL}/wp-json/wp/v2/media`, {
+      method: "POST",
+      headers: {
+        Authorization: wpAuthHeader,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Type": "image/jpeg"
+      },
+      body: Buffer.from(fileBuffer)
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // Start server
 app.listen(PORT, () => {
-  console.log(`MCP WordPress Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
